@@ -59,6 +59,8 @@ class Woord:
                 warr['num'] = self.wobj['num']
             if 'afkorting' in self.wobj:
                 warr['afkorting'] = self.wobj['afkorting']
+            if self.wobj['compound'] != None:
+                warr['compound'] = self.wobj['compound']
         else:
             warr['wikt'] = False
 
@@ -86,7 +88,7 @@ class Woord:
             if not wd:
                 self.wobj = {'wikt': False}
                 return # geen wiktionary-pagina voor dit woord
-        w = wkt.wordToObj(wd, self.woord, self.base)
+        w = wkt.wordToObj(wd[0], self.woord, self.base, wd[1])
         self.wobj = w
 
     def getTag(self, tag):

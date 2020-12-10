@@ -6,31 +6,41 @@ def dewikify(w):
     return w.lstrip('[').rstrip(']')
 
 def getPrefix(w):
+    # deze getPrefix vindt niet prefixes van woorden eindigend op een -f of -s die -en- krijgen;
+    # die hebben namelijk een prefix met -v of -z in dat geval.
+    # deze gevallen worden alsnog afgehandeld door verbeter.py, aangezien hun meervoudsvormen de default
+    # zijn zodra er geen samenstellingen gevonden worden via deze functie
     r = requests.get('https://nl.wiktionary.org/w/api.php?action=query&format=json&list=allpages&aplimit=max&apprefix={}'.format(w))
     prefixes = json.loads(r.text)['query']['allpages']
     if len(prefixes) == 0:
         return []
     # zet alle pagina's behalve verkleinwoorden en simpele meervouden in een array. We zoeken samenstellingen,
     # dus meervouden en verkleinwoorden zijn niet nuttig. 
-    pages = [(p['title'], p['pageid']) for p in prefixes if not p['title'].endswith('je') and p['title'] not in [w + 'en', w + 's', w + "'s"]]
+    pages = [p['title'] for p in prefixes if not p['title'].endswith('je') and p['title'] not in [w + 'en', w + 's', w + "'s"]]
     return pages
 
 def wordData(w):
     prefixes = getPrefix(w)
-    titles = '|'.join([p[0] for p in prefixes])
+    titles = '|'.join(prefixes[0:50]) # maximaal 50 titels toegestaan
     if titles == '':
         # geen pagina met deze titel gevonden
         return False
     url = 'https://nl.wiktionary.org/w/api.php?action=query&prop=revisions&rvslots=main&rvprop=content&format=json&titles={}'.format(titles)
-    #print(url)
+    if '|' in url:
+        url = url[0:url.rindex('|', 0, 2048)] # trim tot maximumlengte van een URL
     r = requests.get(url)
     pgs = json.loads(r.text)['query']['pages']
-    txt = pgs[str(prefixes[0][1])]['revisions'][0]['slots']['main']['*']
-    return txt.replace('{{pn}}', w);
+    txts = [(pgs[p]['title'], pgs[p]['revisions'][0]['slots']['main']['*']) for p in pgs]
+    compound = None # default; zo kun je zien of er een compound gevonden is op wiktionary
+    for txt in txts:
+        match = re.findall(r'{{samen\|nld\|{}\|.*?\|.*?\|([^\|]*)'.format(w), txt[1])
+        if match:
+            # trim de match van het samengestelde woord om de 'stam' van een samenstelling te hebben.
+            compound = txt[0][:-len(match[0])]
+    wd = txts[0][1]
+    return (wd.replace('{{pn}}', w), compound);
 
-print(wordData('vereniging'))
-
-def wordToObj(text, pn, base):
+def wordToObj(text, pn, base, compound):
     try:
         frm = text.index('{{=nld=}}')
     except:
@@ -41,6 +51,9 @@ def wordToObj(text, pn, base):
         to = len(text)
     txt = text[frm:to]
     dic = {'wikt': True}
+
+    dic['compound'] = compound
+
     m, f, n = '{{m}}' in txt, '{{f}}' in txt, '{{n}}' in txt
     # geslacht van het woord:
     if (m and f):

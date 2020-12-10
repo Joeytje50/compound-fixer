@@ -63,7 +63,7 @@ def plakvast(a, b):
     # van het tweede woord (geslacht, samenvoeging, etc).
     print('vastgeplakt:', a.orig, b.orig)
     b.orig = a.orig.rstrip() + b.orig.lstrip()
-    b.comp = a.orig.rstrip()
+    b.comp = a.comp + a.orig.rstrip()
     if 'num' in a.wobj and 'num' in b.wobj:
         # honderd (100) drie (3) -> 103
         b.wobj['num'] += a.wobj['num']
@@ -91,6 +91,13 @@ def klinkerbotsing(a, b):
         koppelstreep(a, b)
     else:
         plakvast(a, b)
+
+def compound(a, b):
+    print('compounded')
+    if a.wobj['compound'] == None:
+        klinkerbotsing(a, b)
+    a.orig = a.comp + a.wobj['compound']
+    klinkerbotsing(a, b)
 
 def koppelstreep(a, b):
     a.orig = a.orig.rstrip() + '-'
@@ -199,6 +206,8 @@ def koppel(a, b, c = None):
     elif isSuffix(b):
         # schoolvrij, gedachteloos; niet scholenvrij, gedachtenloos.
         plakvast(a, b)
+    elif a.wobj['compound'] != None:
+        compound(a, b)
 
     # vanaf hier alle speciale gevallen afgehandeld;
     # volg nu:
