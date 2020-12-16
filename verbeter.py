@@ -61,7 +61,7 @@ def zoekKoppelS(w):
 def plakvast(a, b):
     # behoud eigenschappen van het tweede woord; samenstellingen volgen grammatica
     # van het tweede woord (geslacht, samenvoeging, etc).
-    print('vastgeplakt:', a.orig, b.orig)
+    # print('vastgeplakt:', a.orig, b.orig)
     b.orig = a.orig.rstrip() + b.orig.lstrip()
     b.comp = a.comp + a.orig.rstrip()
     if 'num' in a.wobj and 'num' in b.wobj:
@@ -93,7 +93,6 @@ def klinkerbotsing(a, b):
         plakvast(a, b)
 
 def compound(a, b):
-    print('compounded')
     if a.wobj['compound'] == None:
         klinkerbotsing(a, b)
     a.orig = a.comp + a.wobj['compound']
@@ -309,9 +308,10 @@ def checkCompound(prev, cur, nxt):
     elif prev.dep in ['nmod', 'amod'] and prev.func in ['N', 'ADJ'] and (isCNOM(cur.dep) or cur.dep == 'appos') and cur.func in ['N', 'ADJ']:
         # tv-programma
         koppel(prev, cur)
-    elif prev.dep in ['nmod', 'amod'] and cur.func == 'SPEC' and cur.functype == 'deeleigen' and cur.dep in ['flat', 'appos']:
+    #elif prev.dep in ['nmod', 'amod'] and cur.func == 'SPEC' and cur.functype == 'deeleigen' and cur.dep in ['flat', 'appos']:
         # een nmod/amod vóór een deeleigen wil eigenlijk eraan vast zitten.
-        koppel(prev, cur)
+        # TODO: gaat fout in geval van AnneFrank Huis
+    #    koppel(prev, cur)
     elif prev.dep == cur.dep and isCNOM(cur.dep):
         # zelfde functie in de zin en vervult de rol van ow/lv/mwvw
         koppel(prev, cur)
@@ -367,9 +367,10 @@ def checkCompound(prev, cur, nxt):
         # jaren-80-muziek (witte boekje); groene boekje 'jaren 80-muziek' niet ondersteund.
         koppelstreep(prev, cur)
         koppelstreep(cur, nxt[0])
-    elif prev.func == 'TW' and prev.dep == 'nummod' and (isCNOM(cur.dep) or cur.dep in ['nmod', 'amod']):
-        koppelstreep(prev, cur)
-    elif prev.func == 'TW' and isCijfer(prev) and (cur.func == 'ADJ' or (cur.dep == 'nmod' and isCNOM(nxt[0].dep))):
+    #elif prev.func == 'TW' and prev.dep == 'nummod' and (isCNOM(cur.dep) or cur.dep in ['nmod', 'amod']):
+    # "Dit kan met twee mensen." gaat hier fout.
+    #    koppelstreep(prev, cur)
+    elif prev.func == 'TW' and isCijfer(prev) and (cur.func == 'ADJ' or ((cur.dep == 'nmod' or cur.dep == 'fixed') and isCNOM(nxt[0].dep))):
         # jaren 80-muziek (groene boekje). 16-jarige;
         # 100-dollarbiljetten, 24-uursservice
         koppelstreep(prev, cur)
@@ -395,18 +396,15 @@ def fixPOS(w):
         # zowel N als ADJ kunnen niet volgens wiktionary; als WW wel kan, maken we dat ervan
         # dit is de minst waarschijnlijke, omdat spacy woorden vaker niet-WWs als WW klassificeert, dan WWs als iets anders.
         w.func = 'WW'
-    if w.func != oldfunc:
-        print("!!!!!!!!!! Woordfunctie overschreven voor '{}' van {} naar {}.".format(w.orig, oldfunc, w.func))
     # else doe niks; wiktionary klassificeert het als niet N/ADJ/WW
 
-def fixText(txt, dic = 's'):
+    #if w.func != oldfunc:
+    #    print("!!!!!!!!!! Woordfunctie overschreven voor '{}' van {} naar {}.".format(w.orig, oldfunc, w.func))
+
+def fixText(txt, dic = 's', debug = 0):
     text = ''
     doc = inter.nlp[dic](txt)
     zinnen = doc.sents
-    if len(sys.argv) > 1:
-        debug = sys.argv[1]
-    else:
-        debug = 0
     for zin in zinnen:
         words = inter.leeszin(zin, 's', debug)
         for w in words:
@@ -424,13 +422,35 @@ def fixText(txt, dic = 's'):
             if w.func == None:
                 continue
             zin += w.orig
-        print(zin)
+        yield zin
+
+def fixFile(filename):
+    with open(filename, 'r') as f:
+        line = f.readline()
+        while line != '':
+            for z in fixText(line, 's', debug):
+                print(z, end='', sep='')
+            line = f.readline()
 
 zin = "Dit is een voorbeeldzin waarin alles goed gespeld is, waarmee het spacy-algoritme wordt gedemonstreerd."
-zin = "Hoe gaat het?"
+zin = "Wat een mooie dag is het vandaag. Hoe gaat het?\nMet mij goed namelijk."
+
+filename, debug = None, 0
+if len(sys.argv) > 1:
+    filename = sys.argv[1]
+if len(sys.argv) > 2:
+    debug = int(sys.argv[2])
+
+if filename:
+    print('Fixed file', filename)
+    fixFile(filename)
+    zin = ''
 
 while zin != '':
     #doc = next(inter.nlp['s'](zin).sents)
     #words = inter.leeszin(doc)
-    fixText(zin)
-    zin = input("-> ")
+    zin = input() # input("-> ")
+    print(zin, "\n==>\n", end='', sep='', flush=True)
+    for z in fixText(zin, 's', debug):
+        print(z, end='', sep='')
+    print('')

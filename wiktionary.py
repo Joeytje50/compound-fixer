@@ -11,6 +11,9 @@ def getPrefix(w):
     # deze gevallen worden alsnog afgehandeld door verbeter.py, aangezien hun meervoudsvormen de default
     # zijn zodra er geen samenstellingen gevonden worden via deze functie
     r = requests.get('https://nl.wiktionary.org/w/api.php?action=query&format=json&list=allpages&aplimit=max&apprefix={}'.format(w))
+    if 'error' in json.loads(r.text):
+        # invalid title, etc
+        return []
     prefixes = json.loads(r.text)['query']['allpages']
     if len(prefixes) == 0:
         return []
@@ -82,7 +85,6 @@ def wordToObj(text, pn, base, compound):
     elif re.search(getal_re, txt.lower()):
         dic['num'] = re.findall(getal_re, txt.lower())[0]
     elif '{{-num-' in txt or '{{nld-telw' in txt:
-        print(re.match(getal_re, txt.lower()), re.match(dec_re, txt.lower()))
         dic['num'] = True
     
     if 'num' in dic and dic['num'] != True:
