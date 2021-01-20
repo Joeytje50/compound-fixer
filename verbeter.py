@@ -1,4 +1,7 @@
 import re
+import requests
+from bs4 import BeautifulSoup
+from html2text import html2text
 import interpreteer as inter
 import wiktionary as wikt
 # voor klinkerbotsingen:
@@ -6,8 +9,6 @@ from unidecode import unidecode
 import sys
 
 # TODO: spacy confidence ophalen (onmogelijk?)
-# TODO: wiktionary als 2e bron oppakken
-# TODO: 
 
 ######### Checks voor woordeigenschappen #########
 
@@ -61,9 +62,9 @@ def zoekKoppelS(w):
 def plakvast(a, b):
     # behoud eigenschappen van het tweede woord; samenstellingen volgen grammatica
     # van het tweede woord (geslacht, samenvoeging, etc).
-    # print('vastgeplakt:', a.orig, b.orig)
+    #print('vastgeplakt: {},{},{},{},{},{}'.format(a.orig, b.orig, a.comp, b.comp, a.woord, b.woord))
     b.orig = a.orig.rstrip() + b.orig.lstrip()
-    b.comp = a.comp + a.orig.rstrip()
+    b.comp = a.orig.rstrip()
     if 'num' in a.wobj and 'num' in b.wobj:
         # honderd (100) drie (3) -> 103
         b.wobj['num'] += a.wobj['num']
@@ -168,7 +169,9 @@ def koppelInconsistent(a, b):
 def koppel(a, b, c = None):
     """ Zorg dat woorden correct worden samengevoegd
         Deze functie checkt niet óf, maar hóé iets moet worden samengevoegd."""
-
+    #print('koppel:', a.orig, b.orig)
+    if a.woord == '[' and b.woord == '[':
+        return
     if c != None and b.woord == 'en':
         # vijfentwintig
         if a.woord[-1] == 'e':
@@ -268,6 +271,8 @@ def koppel(a, b, c = None):
 ######### Hoofdfunctie #########
 
 def isCNOM(n):
+    if not n:
+        return False
     # is core nominal?
     # obl functioneert vaak hetzelfde als core nominals, dus worden hier ook meegenomen
     return n.split(':')[0] in ['nsubj', 'obj', 'iobj', 'obl']
@@ -282,6 +287,15 @@ def checkCompound(prev, cur, nxt):
         # als in de vorige iteratie nxt[0] is afgehandeld, doe dan niets
         # dit gebeurt bijvoorbeeld bij 'vijf en twintig' -> 'vijfentwintig'.
         return;
+    elif prev.func == 'TW' and cur.func == 'TW':
+        # honderddrie, duizendtwee, honderdduizend, 300 000
+        if not grootGetal(prev) and not grootGetal(cur) and not prev.woord.endswith('duizend'):
+            # behoud nodige spaties bij grote getallen:
+            # vijf_miljoen_en_drie; vijf_miljoen_vierenveertig, drieduizend_zes;
+            koppel(prev, cur)
+    elif prev.func == 'TW' and cur.woord == 'en' and nxt[0].func == 'TW' and not grootGetal(prev):
+        # drieëntwintig, eenenveertig
+        koppel(prev, cur, nxt[0])
     elif prev.dep in ['amod', 'nmod'] and prev.func == 'ADJ' and prev.functype == 'prenom' and \
         (isCNOM(cur.dep) or cur.dep in ['amod', 'nmod']) and cur.func == nxt[0].func == 'N' and cur.functype == nxt[0].functype == 'soort' and \
         (nxt[0].dep in ['ROOT', 'xcomp', 'compound:prt'] or isCNOM(nxt[0].dep)):
@@ -305,9 +319,10 @@ def checkCompound(prev, cur, nxt):
     elif prev.func == cur.func and cur.func in ['N', 'ADJ'] and prev.dep in ['nmod', 'amod'] and cur.dep in ['nmod', 'amod']:
         # twee ZNWs of BVNWs achter elkaar met een 'modifyer'-functie op het volgende woord.
         koppel(prev, cur)
-    elif prev.dep in ['nmod', 'amod'] and prev.func in ['N', 'ADJ'] and (isCNOM(cur.dep) or cur.dep == 'appos') and cur.func in ['N', 'ADJ']:
+    #elif prev.dep in ['nmod', 'amod'] and prev.func in ['N', 'ADJ'] and (isCNOM(cur.dep) or cur.dep == 'appos') and cur.func in ['N', 'ADJ']:
+    # Gaat fout op [[Abdij_Lilbosch]] "eigen boerderij"
         # tv-programma
-        koppel(prev, cur)
+    #    koppel(prev, cur)
     #elif prev.dep in ['nmod', 'amod'] and cur.func == 'SPEC' and cur.functype == 'deeleigen' and cur.dep in ['flat', 'appos']:
         # een nmod/amod vóór een deeleigen wil eigenlijk eraan vast zitten.
         # TODO: gaat fout in geval van AnneFrank Huis
@@ -315,15 +330,6 @@ def checkCompound(prev, cur, nxt):
     elif prev.dep == cur.dep and isCNOM(cur.dep):
         # zelfde functie in de zin en vervult de rol van ow/lv/mwvw
         koppel(prev, cur)
-    elif prev.func == 'TW' and cur.func == 'TW':
-        # honderddrie, duizendtwee, honderdduizend, 300 000
-        if not grootGetal(prev) and not grootGetal(cur) and not prev.woord.endswith('duizend'):
-            # behoud nodige spaties bij grote getallen:
-            # vijf_miljoen_en_drie; vijf_miljoen_vierenveertig, drieduizend_zes;
-            koppel(prev, cur)
-    elif prev.func == 'TW' and cur.woord == 'en' and nxt[0].func == 'TW' and not grootGetal(prev):
-        # drieëntwintig, eenenveertig
-        koppel(prev, cur, nxt[0])
     elif prev.dep == 'compound:prt' and prev.func == 'BW' and cur.func == 'WW':
         # weg gesleurd, door gehaald, bij gevoegd, etc.
         plakvast(prev, cur)
@@ -332,6 +338,7 @@ def checkCompound(prev, cur, nxt):
         # soms wordt een znw als ww herkend, zoals 'dit is een lading honden poep'. De syntactische analyse is dan nauwkeuriger.
         koppel(prev, cur)
     elif isCNOM(prev.dep) and cur.dep == 'appos':
+        # Gaat momenteel fout met "De abdij Lilbosch is mooi."
         # 'De buidel rat is dood'
         koppel(prev, cur)
     elif isCNOM(prev.dep) and cur.dep == 'nmod':
@@ -386,8 +393,8 @@ def fixPOS(w):
         # wiktionary vindt dat de classificatie mogelijk is, of het woord is niet in het lijstje relevante woordtypes
         pass
     elif w.wobj['wt']['N']:
-        # heuristiek: als een WW of ADJ verkeerd geclassificeerd is, en het mag een N zijn,
-        # dan er vanuit gaan dat het een N mag zijn, en niet kijken of het een ADJ mag zijn.
+        # heuristiek: als een WW, BW of ADJ verkeerd geclassificeerd is, en het mag een N zijn,
+        # dan er vanuit gaan dat het een N mag zijn, en niet kijken of het iets anders mag zijn.
         w.func = 'N'
     elif w.wobj['wt']['ADJ']:
         # heuristiek: idem, maar dan voor een ADJ
@@ -396,7 +403,10 @@ def fixPOS(w):
         # zowel N als ADJ kunnen niet volgens wiktionary; als WW wel kan, maken we dat ervan
         # dit is de minst waarschijnlijke, omdat spacy woorden vaker niet-WWs als WW klassificeert, dan WWs als iets anders.
         w.func = 'WW'
-    # else doe niks; wiktionary klassificeert het als niet N/ADJ/WW
+    elif w.wobj['wt']['BW']:
+        # bijwoorden zijn relatief zeldzaam; dit is dus de minst waarschijnlijke override
+        w.func = 'BW'
+    # else doe niks; wiktionary klassificeert het als niet N/ADJ/WW/BW
 
     #if w.func != oldfunc:
     #    print("!!!!!!!!!! Woordfunctie overschreven voor '{}' van {} naar {}.".format(w.orig, oldfunc, w.func))
@@ -424,33 +434,109 @@ def fixText(txt, dic = 's', debug = 0):
             zin += w.orig
         yield zin
 
-def fixFile(filename):
-    with open(filename, 'r') as f:
-        line = f.readline()
-        while line != '':
-            for z in fixText(line, 's', debug):
-                print(z, end='', sep='')
-            line = f.readline()
+def fixFile(filename, debug):
+    with open(filename, 'r') as r:
+        outf = (filename+' ')[:filename.rfind('.')] + '.out'
+        with open(outf, 'w') as w:
+            print("writing to {}".format(outf))
+            line = r.readline()
+            while line != '':
+                for z in fixText(line, 's', debug):
+                    print(z, end='', sep='')
+                    w.write(z)
+                    w.flush()
+                line = r.readline()
 
-zin = "Dit is een voorbeeldzin waarin alles goed gespeld is, waarmee het spacy-algoritme wordt gedemonstreerd."
-zin = "Wat een mooie dag is het vandaag. Hoe gaat het?\nMet mij goed namelijk."
+def main(filename, debug):
+    zin = "Dit is een voorbeeldzin waarin alles goed gespeld is, waarmee het spacy-algoritme wordt gedemonstreerd."
+    zin = "Wat een mooie dag is het vandaag. Hoe gaat het?\nMet mij goed namelijk."
+    if filename:
+        try:
+            fixFile(filename, debug)
+        except KeyboardInterrupt:
+            print('')
+        zin = ''
+
+    while zin != '':
+        #doc = next(inter.nlp['s'](zin).sents)
+        #words = inter.leeszin(doc)
+        zin = input() # input("-> ")
+        #print(zin, "\n==>\n", end='', sep='', flush=True)
+        for z in fixText(zin, 's', debug):
+            if debug:
+                print(z, end='', sep='')
+                if not filename:
+                    print('')
+            pass
+        #print('')
+
+def dewikify(text):
+    text = re.sub(r"(={1,6})\s+(.*)\s+\1", r"\2", text) # verwijder titelopmaak
+    text = re.sub(r"'{2,3}", "", text) # verwijder bold/italic text
+    text = re.sub(r"\[\[(?![Ff]ile:|[Ii]mage|[Bb]estand|[Cc]ategor(ie|y))([^\|\]]*\|)?([^\]]+)\]\]", r"\3", text) # verwijder wikilinks, inclusief in afbeelding-captions
+    text = re.sub(r"\[\[([Ff]ile:|[Ii]mage|[Bb]estand|[Cc]ategor(ie|y))[^\]]+\]\]", "", text) # verwijder afbeeldingen/categorieën, nadat alle interne [[]] uit de [[File:...|caption [[link]] delen]] zijn verwijderd
+    text = re.sub(r"\[([a-z]+:(\/\/)?)[^ ]+ ([^\]]+)\]", r"\3", text) # verwijder externe links
+    text = re.sub(r"<(math|code|nowiki|source|ref)>(?!<\/\1>)(.+)<\/\1>", "", text) # verwijder niet-tekstuele tags incl. inhoud
+    text = re.sub(r"<[^>]+\/>", "", text) # verwijder alle self-closing tags
+    rgx = r"\{\{\{((?!(\{|\}){2})(.|\n|\r))+\}\}\}|\{\{((?!(\{|\}){2})(.|\n|\r))+\}\}"
+    while re.search(rgx, text): # blijf de 'innermost' template verwijderen zolang er templates zijn; voorkomt 
+        text = re.sub(rgx, "", text)
+    return text.strip()
+
+def getWiki(filename, debug):
+    if not filename or not filename.startswith('wikipedia/') or filename.endswith('.wiki'):
+        return False
+    article = filename[len('wikipedia/'):]
+    pagina = article
+    repeat = 1
+    if article.lower() == 'special:random':
+        repeat = debug or 1
+        debug = 0
+    for i in range(repeat):
+        r = requests.get('https://nl.wikipedia.org/w/index.php?title={}&action=raw'.format(pagina))
+        article = re.findall(r"title=([^&]+)", r.url)[0] # handel redirects af, zoals o.a. Special:Random
+        with open('wikipedia/'+article+'.wiki', 'w') as w:
+            w.write(r.text)
+        with open('wikipedia/'+article+'.txt', 'w') as w:
+            w.write(dewikify(r.text))
+            filename = 'wikipedia/'+article+'.txt'
+        main(filename, debug)
+    return True
+
+def getFok(filename, debug):
+    if not filename or not filename.startswith('fok/') or filename.endswith('.txt'):
+        return False
+    postid = filename[len('fok/'):]
+    url = "http://forum.fok.nl/topic/{}"
+    r = requests.get(url.format(postid))
+    soup = BeautifulSoup(r.text, 'html.parser')
+    todelete = ".quoteTitel, .contents img, .quote b:first-child"
+    delete = soup.select(todelete)
+    while len(delete):
+        print(delete)
+        for d in delete:
+            d.decompose()
+        delete = soup.select(todelete)
+    thread = soup.find_all('div', {'class':'postmain_right'})
+    posts = []
+    for post in thread:
+        text = html2text(str(post))
+        posts.append(text)
+    filename = 'fok/'+postid+'.txt'
+    with open(filename, 'w') as w:
+        w.write("\n\n".join(posts))
+    main(filename, debug)
+    return True
 
 filename, debug = None, 0
-if len(sys.argv) > 1:
-    filename = sys.argv[1]
 if len(sys.argv) > 2:
+    filename = sys.argv[1]
     debug = int(sys.argv[2])
+elif len(sys.argv) > 1:
+    if sys.argv[1] == '1' or sys.argv[1] == '0':
+        debug = int(sys.argv[1])
+    else:
+        filename = sys.argv[1]
 
-if filename:
-    print('Fixed file', filename)
-    fixFile(filename)
-    zin = ''
-
-while zin != '':
-    #doc = next(inter.nlp['s'](zin).sents)
-    #words = inter.leeszin(doc)
-    zin = input() # input("-> ")
-    print(zin, "\n==>\n", end='', sep='', flush=True)
-    for z in fixText(zin, 's', debug):
-        print(z, end='', sep='')
-    print('')
+if not getWiki(filename, debug) and not getFok(filename, debug):
+    main(filename, debug)

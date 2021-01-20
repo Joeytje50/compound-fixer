@@ -1,0 +1,11 @@
+check of linkerdeel van compounded woorden goed gaan in specifieke gevallen:
+boom kind opvang -> boomkind opvang -> boomkinderopvang
+
+Herschrijf lange if-statements naar nested
+Filter onjuiste koppelvoorwaarden
+Cache opgehaalde woorden
+Draai script op Etalageartikelen Wikipedia
+Draai script op random FOK!forumposts
+
+Scriptie: zie comments in overleaf
+

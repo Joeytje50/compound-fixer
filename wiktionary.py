@@ -1,6 +1,7 @@
 import re
 import requests
 import json
+import urllib
 
 def dewikify(w):
     return w.lstrip('[').rstrip(']')
@@ -10,7 +11,7 @@ def getPrefix(w):
     # die hebben namelijk een prefix met -v of -z in dat geval.
     # deze gevallen worden alsnog afgehandeld door verbeter.py, aangezien hun meervoudsvormen de default
     # zijn zodra er geen samenstellingen gevonden worden via deze functie
-    r = requests.get('https://nl.wiktionary.org/w/api.php?action=query&format=json&list=allpages&aplimit=max&apprefix={}'.format(w))
+    r = requests.get('https://nl.wiktionary.org/w/api.php?action=query&format=json&list=allpages&aplimit=max&apprefix={}'.format(urllib.parse.quote_plus(w)))
     if 'error' in json.loads(r.text):
         # invalid title, etc
         return []
@@ -28,18 +29,38 @@ def wordData(w):
     if titles == '':
         # geen pagina met deze titel gevonden
         return False
-    url = 'https://nl.wiktionary.org/w/api.php?action=query&prop=revisions&rvslots=main&rvprop=content&format=json&titles={}'.format(titles)
+    url = 'https://nl.wiktionary.org/w/api.php?action=query&prop=revisions&rvslots=main&rvprop=content&format=json&titles={}'.format(urllib.parse.quote_plus(titles))
     if '|' in url:
         url = url[0:url.rindex('|', 0, 2048)] # trim tot maximumlengte van een URL
     r = requests.get(url)
     pgs = json.loads(r.text)['query']['pages']
     txts = [(pgs[p]['title'], pgs[p]['revisions'][0]['slots']['main']['*']) for p in pgs]
     compound = None # default; zo kun je zien of er een compound gevonden is op wiktionary
+    streepje = None
     for txt in txts:
         match = re.findall(r'{{samen\|nld\|{}\|.*?\|.*?\|([^\|]*)'.format(w), txt[1])
-        if match:
-            # trim de match van het samengestelde woord om de 'stam' van een samenstelling te hebben.
-            compound = txt[0][:-len(match[0])]
+        for m in match:
+            if m in txt[0]:
+                # neem het matchende woord alleen tot de positie waar het tweede woord begint
+                trim = txt[0].index(m.lstrip('-')) # strip alle begin-streepjes als die onnodig meegenomen zijn
+                compound = txt[0][:trim]
+                if compound[-1] == "'":
+                    # verwijder 'compounds' zoals "tv'loos" als die anders waren gedetecteerd.
+                    # er bestaan geen echte compounds met ' als koppelteken.
+                    compound = None
+                #print('compound in', txt[0], trim, m, compound)
+                if compound[-1] == '-':
+                    # mogelijke klinkerbotsing gevonden (bv 'drie-eenheid')
+                    # hou deze vorm even in de wacht; als er een andere compound wordt gevonden zonder streepje,
+                    # dan was dit een klinkerbotsing. Zo niet, dan was dit waarschijnlijk een afkorting (bv 'tv-kast')
+                    streepje = compound
+                    compound = None
+                break
+        if compound:
+            break
+    if not compound and streepje:
+        # geen andere compounds gevonden dan een vorm met streepje; gebruik die vorm.
+        compound = streepje
     wd = txts[0][1]
     return (wd.replace('{{pn}}', w), compound);
 
@@ -156,6 +177,7 @@ def wordToObj(text, pn, base, compound):
     dic['wt']['N'] = '{{-nlnoun-' in txt
     dic['wt']['ADJ'] = '{{-adjc-' in txt
     dic['wt']['WW'] = '{{-verb-' in txt
+    dic['wt']['BW'] = '{{-adverb-' in txt
 
     return dic
 

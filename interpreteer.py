@@ -1,6 +1,7 @@
 import spacy
 import hunspell
 import wiktionary as wkt
+from sys import stderr
 
 # https://spacy.io/api/dependencyparser
 nlp = {
@@ -16,7 +17,7 @@ def infoheader():
             '`functype`\t',
             '`dep`\t\t',
             '`base`\t\t',
-            '`warr`')
+            '`warr`', file=stderr)
 
 def ellips(arr, lim=3):
     if len(arr) > lim:
@@ -73,6 +74,7 @@ class Woord:
                 warr, '\n'+'\t'*9,
                 self.tag,
                 #self.wobj,
+                file=stderr
             )
         #print(self.tag)
 
