@@ -26,7 +26,7 @@ def ellips(arr, lim=3):
         return arr
 
 class Woord:
-    def __init__(self, w, orig, base, tag, ok, dep):
+    def __init__(self, lookup, w, orig, base, tag, ok, dep):
         self.woord = w
         self.orig = orig
         self.base = base
@@ -36,8 +36,11 @@ class Woord:
         self.comp = ''
         if w == None:
             self.wobj = {'wikt': False}
+        elif w in lookup:
+            self.wobj = lookup[w]
         else:
             self.wikt()
+            lookup[w] = self.wobj
 
     def printinfo(self):
         warr = {}
@@ -86,7 +89,7 @@ class Woord:
         if not wd:
             # probeer het woord zelf ipv de base; 'voetballer' wordt als base bijvoorbeeld 'voetball',
             # terwijl 'voetballer' wel gewoon bestaat.
-            wd = wkt.wordData(self.orig)
+            wd = wkt.wordData(self.orig.strip())
             if not wd:
                 self.wobj = {'wikt': False}
                 return # geen wiktionary-pagina voor dit woord
@@ -106,15 +109,15 @@ class Woord:
         return tags
 
 
-def leeszin(zin, dic = 's', debug=True):
+def leeszin(zin, lookup, dic = 's', debug=True):
     if debug:
         infoheader()
     words = []
     for w in zin:
         tags = w.tag_.split('|')
-        W = Woord(w.norm_, w.text_with_ws, w.lemma_, w.tag_, hsp.spell(w.norm_), w.dep_)
+        W = Woord(lookup, w.norm_, w.text_with_ws, w.lemma_, w.tag_, hsp.spell(w.norm_), w.dep_)
         words.append(W)
         if debug:
             W.printinfo()
-    words.append(Woord(*(None,) * 6))
+    words.append(Woord(*(None,) * 7))
     return words

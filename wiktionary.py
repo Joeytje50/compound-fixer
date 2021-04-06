@@ -44,12 +44,12 @@ def wordData(w):
                 # neem het matchende woord alleen tot de positie waar het tweede woord begint
                 trim = txt[0].index(m.lstrip('-')) # strip alle begin-streepjes als die onnodig meegenomen zijn
                 compound = txt[0][:trim]
-                if compound[-1] == "'":
+                if len(compound) > 0 and compound[-1] == "'":
                     # verwijder 'compounds' zoals "tv'loos" als die anders waren gedetecteerd.
                     # er bestaan geen echte compounds met ' als koppelteken.
                     compound = None
                 #print('compound in', txt[0], trim, m, compound)
-                if compound[-1] == '-':
+                if len(compound) > 0 and compound[-1] == '-':
                     # mogelijke klinkerbotsing gevonden (bv 'drie-eenheid')
                     # hou deze vorm even in de wacht; als er een andere compound wordt gevonden zonder streepje,
                     # dan was dit een klinkerbotsing. Zo niet, dan was dit waarschijnlijk een afkorting (bv 'tv-kast')
@@ -174,10 +174,10 @@ def wordToObj(text, pn, base, compound):
         pass
 
     dic['wt'] = {}
-    dic['wt']['N'] = '{{-nlnoun-' in txt
-    dic['wt']['ADJ'] = '{{-adjc-' in txt
-    dic['wt']['WW'] = '{{-verb-' in txt
-    dic['wt']['BW'] = '{{-adverb-' in txt
+    dic['wt']['N'] = '{{-nlnoun-' in txt or '{{nl-noun-' in txt
+    dic['wt']['ADJ'] = '{{-adjc-' in txt or '{{nl-adjc-' in txt
+    dic['wt']['WW'] = '{{-verb-' in txt or '{{nl-verb-' in txt
+    dic['wt']['BW'] = '{{-adverb-' in txt or '{{nl-adverb-' in txt
 
     return dic
 

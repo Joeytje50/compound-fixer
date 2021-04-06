@@ -1,5 +1,6 @@
 import re
 import requests
+import random
 from bs4 import BeautifulSoup
 from html2text import html2text
 import interpreteer as inter
@@ -7,6 +8,9 @@ import wiktionary as wikt
 # voor klinkerbotsingen:
 from unidecode import unidecode
 import sys
+import os.path
+
+lookup = {}
 
 # TODO: spacy confidence ophalen (onmogelijk?)
 
@@ -54,7 +58,7 @@ def isInconsistent(w):
 
 def zoekKoppelS(w):
     # Bepaal of er een koppel-S in een samenvoeging moet worden gezet
-    # TODO
+    # Geen duidelijke rule-based voorwaarden
     return False
 
 ######### Samenvoegingsfuncties #########
@@ -62,7 +66,6 @@ def zoekKoppelS(w):
 def plakvast(a, b):
     # behoud eigenschappen van het tweede woord; samenstellingen volgen grammatica
     # van het tweede woord (geslacht, samenvoeging, etc).
-    #print('vastgeplakt: {},{},{},{},{},{}'.format(a.orig, b.orig, a.comp, b.comp, a.woord, b.woord))
     b.orig = a.orig.rstrip() + b.orig.lstrip()
     b.comp = a.orig.rstrip()
     if 'num' in a.wobj and 'num' in b.wobj:
@@ -127,7 +130,7 @@ def koppelN(a, b):
     if a.woord[-1] == 'n':
         plakvast(a, b)
     elif a.woord[-1] == 'e':
-        # TODO: Niet triviaal. Gemeenteraad is zonder -n-
+        # Niet triviaal. Gemeenteraad is zonder -n-. Dit is dus niet altijd correct. Doe een 'best guess'
         a.orig += 'n'
         plakvast(a, b)
     else:
@@ -200,7 +203,7 @@ def koppel(a, b, c = None):
         koppelS(a, b)
     elif not a.wobj['wikt']:
         # woord staat niet in wiktionary; verder dan dit kunnen we niets doen.
-        # TODO: linkerdeel opsplitsen in subwoorden om zo wel iets te kunnen doen.
+        # TODO: linkerdeel opsplitsen in subwoorden om zo die woorden in wiktionary op te zoeken
         koppelS(a, b)
     elif b.func == 'WW':
         # avondvullend, bandplakkende, rondlopend; niet avondenvullend, bandenplakkende
@@ -287,100 +290,107 @@ def checkCompound(prev, cur, nxt):
         # als in de vorige iteratie nxt[0] is afgehandeld, doe dan niets
         # dit gebeurt bijvoorbeeld bij 'vijf en twintig' -> 'vijfentwintig'.
         return;
-    elif prev.func == 'TW' and cur.func == 'TW':
-        # honderddrie, duizendtwee, honderdduizend, 300 000
-        if not grootGetal(prev) and not grootGetal(cur) and not prev.woord.endswith('duizend'):
-            # behoud nodige spaties bij grote getallen:
-            # vijf_miljoen_en_drie; vijf_miljoen_vierenveertig, drieduizend_zes;
+
+    if isPrefix(prev):
+        if cur.func == 'N' or cur.func == 'ADJ' or prev.functype == cur.functype == 'deeleigen':
+            # pseudo-intelligent, ex-coach
+            return koppel(prev, cur)
+    elif isSuffix(cur):
+        if prev.func == 'N':
+            return koppel(prev, cur)
+
+    if prev.func == 'TW' and prev.functype == 'hoofd' and prev.dep != 'punct':
+        # niet "de eerste drie" en "In het jaar '95" matchen.
+        # vorige woord is telwoord
+        if cur.func == 'TW':
+            # honderddrie, duizendtwee, honderdduizend, 300 000
+            if not grootGetal(prev) and not grootGetal(cur) and not prev.woord.endswith('duizend'):
+                # behoud nodige spaties bij grote getallen:
+                # vijf_miljoen_en_drie; vijf_miljoen_vierenveertig, drieduizend_zes;
+                return koppel(prev, cur)
+        elif cur.woord == 'en' and nxt[0].func == 'TW' and not grootGetal(prev):
+            # drieëntwintig, eenenveertig
+            return koppel(prev, cur, nxt[0])
+
+    if prev.func == 'N':
+        if cur.dep == 'compound:prt':
+            if prev.dep == 'appos':
+                # Spacy vindt dat dit een compound-part is
+                return koppelstreep(prev, cur)
+        if isSuffix(cur):
+            return koppelstreep(prev, cur)
+        if (cur.dep == 'ROOT' and cur.func == 'N') or (isCNOM(cur.dep) and cur.func in ['N', 'ADJ']):
+            if prev.dep in ['amod', 'nmod']:
+                # bijv maximumgewicht, oud-coach, reclamebord. Als prev ADJ is niet koppelen (bijvoorbeeld 'een rood huis')
+                # soms wordt een znw als ww herkend, zoals 'dit is een lading honden poep'. De syntactische analyse is dan nauwkeuriger.
+                koppel(prev, cur)
+
+        if cur.func == 'N':
+            if prev.dep == cur.dep and isCNOM(cur.dep):
+                # twee ZNWs achter elkaar met dezelfde functie als ow/lv/mwvw in de zin
+                return koppel(prev, cur)
+        
+        if prev.dep == 'obl' and (cur.dep == 'amod' or isCNOM(cur.dep)):
+            # avondvullend programma
             koppel(prev, cur)
-    elif prev.func == 'TW' and cur.woord == 'en' and nxt[0].func == 'TW' and not grootGetal(prev):
-        # drieëntwintig, eenenveertig
-        koppel(prev, cur, nxt[0])
-    elif prev.dep in ['amod', 'nmod'] and prev.func == 'ADJ' and prev.functype == 'prenom' and \
-        (isCNOM(cur.dep) or cur.dep in ['amod', 'nmod']) and cur.func == nxt[0].func == 'N' and cur.functype == nxt[0].functype == 'soort' and \
-        (nxt[0].dep in ['ROOT', 'xcomp', 'compound:prt'] or isCNOM(nxt[0].dep)):
-            # woorden zoals laagsteprijsgarantie, langeafstandsloper, etc.
-            koppel(prev, cur, nxt[0])
-    elif prev.func == 'N' and prev.dep == 'appos' and cur.dep == 'compound:prt':
-        # Spacy vindt dat dit een compound-part is
-        koppelstreep(prev, cur)
-    elif prev.func == 'ADJ' and ('met-e' in prev.tag or 'sup' in prev.tag) and not isPrefix(prev):
-        # bvnw vervoegd met -e(r) of -st(e) worden niet samengesteld; voorbeelden:
-        # De groter wordende man, het grootste gewicht, de vreemde markt, de roodst gloeiende lamp.
-        # bvnw in standaardvorm moeten wel samengevoegd; voorbeelden:
-        # De grootwordende man, het grootgewicht, de vreemdmarkt, de roodgloeiende.
-        return
-    elif prev.func == 'ADJ' and cur.func == 'N' and prev.dep == cur.dep and isCNOM(cur.dep):
-        # TODO: de BHV-zin in de testzinnen wordt nu als 'met-e' gemarkeerd en valt hier dus buiten.
-        koppel(prev, cur)
-    elif prev.func == cur.func == 'N' and prev.dep == cur.dep and isCNOM(prev.dep):
-        # twee ZNWs achter elkaar met dezelfde functie als ow/lv/mwvw in de zin
-        koppel(prev, cur)
-    elif prev.func == cur.func and cur.func in ['N', 'ADJ'] and prev.dep in ['nmod', 'amod'] and cur.dep in ['nmod', 'amod']:
-        # twee ZNWs of BVNWs achter elkaar met een 'modifyer'-functie op het volgende woord.
-        koppel(prev, cur)
-    #elif prev.dep in ['nmod', 'amod'] and prev.func in ['N', 'ADJ'] and (isCNOM(cur.dep) or cur.dep == 'appos') and cur.func in ['N', 'ADJ']:
-    # Gaat fout op [[Abdij_Lilbosch]] "eigen boerderij"
-        # tv-programma
-    #    koppel(prev, cur)
-    #elif prev.dep in ['nmod', 'amod'] and cur.func == 'SPEC' and cur.functype == 'deeleigen' and cur.dep in ['flat', 'appos']:
-        # een nmod/amod vóór een deeleigen wil eigenlijk eraan vast zitten.
-        # TODO: gaat fout in geval van AnneFrank Huis
-    #    koppel(prev, cur)
-    elif prev.dep == cur.dep and isCNOM(cur.dep):
-        # zelfde functie in de zin en vervult de rol van ow/lv/mwvw
-        koppel(prev, cur)
-    elif prev.dep == 'compound:prt' and prev.func == 'BW' and cur.func == 'WW':
-        # weg gesleurd, door gehaald, bij gevoegd, etc.
-        plakvast(prev, cur)
-    elif prev.dep in ['amod', 'nmod'] and prev.func == 'N' and (isCNOM(cur.dep) or (cur.dep == 'ROOT' and cur.func == 'N')):
-        # bijv maximumgewicht, oud-coach, reclamebord. Als prev ADJ is niet koppelen (bijvoorbeeld 'een rood huis')
-        # soms wordt een znw als ww herkend, zoals 'dit is een lading honden poep'. De syntactische analyse is dan nauwkeuriger.
-        koppel(prev, cur)
-    elif isCNOM(prev.dep) and cur.dep == 'appos':
-        # Gaat momenteel fout met "De abdij Lilbosch is mooi."
-        # 'De buidel rat is dood'
-        koppel(prev, cur)
-    elif isCNOM(prev.dep) and cur.dep == 'nmod':
-        # 'Ik heb een student kamer gekocht.
-        koppel(prev, cur)
-    elif prev.func == 'ADJ' and cur.func == 'ADJ':
+
+    if prev.func == 'ADJ':
+        if ('met-e' in prev.tag or 'sup' in prev.tag) and not isPrefix(prev):
+            # bvnw vervoegd met -e(r) of -st(e) worden niet samengesteld; voorbeelden:
+            # De groter wordende man, het grootste gewicht, de vreemde markt, de roodst gloeiende lamp.
+            # bvnw in standaardvorm moeten wel samengevoegd; voorbeelden:
+            # De grootwordende man, het grootgewicht, de vreemdmarkt, de roodgloeiende.
+            return
+        if cur.func == 'N':
+            if prev.dep in ['amod', 'nmod'] and prev.functype == 'prenom':
+                if (isCNOM(cur.dep) or cur.dep in ['amod', 'nmod']) and nxt[0].func == 'N' and cur.functype == nxt[0].functype == 'soort' and (nxt[0].dep in ['ROOT', 'xcomp', 'compound:prt'] or isCNOM(nxt[0].dep)):
+                    # woorden zoals laagsteprijsgarantie, langeafstandsloper, etc.
+                    return koppel(prev, cur, nxt[0])
+            if prev.dep == cur.dep and isCNOM(cur.dep):
+                return koppel(prev, cur)
+            if prev.functype == 'prenom':
+                if prev.dep in ['nmod', 'amod']:
+                    if isCNOM(cur.dep) and isPrefix(prev):
+                        # 'De _oud voetballer_ is blij.', maar moet prefix zijn, anders 'We hebben een avond vullendprogramma gemaakt'.
+                        return koppel(prev, cur)
+                    if cur.dep in ['nmod', 'amod']:
+                        # EHBO diploma in voorbeeldzinnen
+                        return koppel(prev, cur)
+
+    if prev.func == 'BW':
+        if cur.func == 'WW':
+            if prev.dep == 'compound:prt':
+                # weg gesleurd, door gehaald, bij gevoegd, etc.
+                return plakvast(prev, cur)
+
+    if prev.func == cur.func and prev.func in ['N', 'ADJ']:
+        if prev.dep in ['nmod', 'amod'] and cur.dep in ['nmod', 'amod']:
+            # twee ZNWs of BVNWs achter elkaar met een 'modifyer'-functie op het volgende woord.
+            return koppel(prev, cur)
         # prev is in de standaardvorm zonder -e of -st, etc; wegens eerdere selectie daarop
-        if isCNOM(prev.dep) and cur.dep == 'acl':
-            # roodgloeiende
-            koppel(prev, cur)
-        elif prev.func == cur.func == 'ADJ' and prev.dep == 'advmod' and cur.dep in ['acl', 'amod']:
-            # de rood gloeiende draad
-            koppel(prev, cur)
-        # anders niet koppelen.
-    elif prev.func == 'ADJ' and prev.functype == 'prenom' and prev.dep in ['amod', 'nmod'] and isCNOM(cur.dep) and isPrefix(prev):
-        # 'De _oud voetballer_ is blij.', maar moet prefix zijn, anders 'We hebben een avond vullendprogramma gemaakt'.
-        koppel(prev, cur)
-    elif prev.func == 'ADJ' and prev.functype == 'prenom' and prev.dep in ['amod', 'nmod'] and cur.dep in ['amod', 'nmod']:
-        # EHBO diploma in voorbeeldzinnen
-        koppel(prev, cur)
-    elif isPrefix(prev) and (cur.func == 'N' or cur.func == 'ADJ' or (prev.functype == cur.functype == 'deeleigen')):
-        # pseudo-intelligent, ex-coach
-        koppel(prev, cur)
-    elif prev.func == 'N' and prev.dep == 'obl' and (cur.dep == 'amod' or isCNOM(cur.dep)):
-        # avondvullend programma
-        koppel(prev, cur)
-    #elif prev.func == 'ADJ' and prev.dep == 'advmod' and cur.dep == 'amod':
-        # hoogstvervelend, uiterst vervelend
-    #    koppel(prev, cur)
-    elif prev.func == 'N' and isSuffix(cur):
-        koppel(prev, cur)
-    elif prev.woord == 'jaren' and isCijfer(cur) and nxt[0].func == 'N' and (nxt[0].dep == 'appos' or isCNOM(nxt[0].dep)):
-        # jaren-80-muziek (witte boekje); groene boekje 'jaren 80-muziek' niet ondersteund.
-        koppelstreep(prev, cur)
-        koppelstreep(cur, nxt[0])
-    #elif prev.func == 'TW' and prev.dep == 'nummod' and (isCNOM(cur.dep) or cur.dep in ['nmod', 'amod']):
-    # "Dit kan met twee mensen." gaat hier fout.
-    #    koppelstreep(prev, cur)
-    elif prev.func == 'TW' and isCijfer(prev) and (cur.func == 'ADJ' or ((cur.dep == 'nmod' or cur.dep == 'fixed') and isCNOM(nxt[0].dep))):
-        # jaren 80-muziek (groene boekje). 16-jarige;
-        # 100-dollarbiljetten, 24-uursservice
-        koppelstreep(prev, cur)
+        if prev.func == 'ADJ':
+            if isCNOM(prev.dep) and cur.dep == 'acl':
+                # roodgloeiende
+                return koppel(prev, cur)
+            elif prev.dep == 'advmod' and cur.dep == 'acl':
+                # de rood gloeiende draad
+                return koppel(prev, cur)
+            else:
+                # anders niet koppelen.
+                return
+        if prev.dep == cur.dep:
+            if isCNOM(cur.dep):
+                # zelfde functie in de zin en vervult de rol van ow/lv/mwvw
+                return koppel(prev, cur)
+            elif cur.dep == 'nmod':
+                # 'Ik heb een student kamer gekocht.
+                return koppel(prev, cur)
+    if isCijfer(cur):
+        if prev.woord == 'jaren' and nxt[0].func == 'N' and (nxt[0].dep == 'appos' or isCNOM(nxt[0].dep)):
+            # jaren-80-muziek (witte boekje); groene boekje 'jaren 80-muziek' niet ondersteund.
+            koppelstreep(prev, cur)
+            koppelstreep(cur, nxt[0])
+            return
     else:
         # woorden niet samenvoegen
         return
@@ -408,15 +418,15 @@ def fixPOS(w):
         w.func = 'BW'
     # else doe niks; wiktionary klassificeert het als niet N/ADJ/WW/BW
 
-    #if w.func != oldfunc:
-    #    print("!!!!!!!!!! Woordfunctie overschreven voor '{}' van {} naar {}.".format(w.orig, oldfunc, w.func))
+    if w.func != oldfunc:
+        print("!!!!!!!!!! Woordfunctie overschreven voor '{}' van {} naar {}.".format(w.orig, oldfunc, w.func))
 
 def fixText(txt, dic = 's', debug = 0):
     text = ''
     doc = inter.nlp[dic](txt)
     zinnen = doc.sents
     for zin in zinnen:
-        words = inter.leeszin(zin, 's', debug)
+        words = inter.leeszin(zin, lookup, 's', debug)
         for w in words:
             # check of wiktionary vindt dat een woord mogelijk is in de classificatie.
             fixPOS(w)
@@ -438,7 +448,7 @@ def fixFile(filename, debug):
     with open(filename, 'r') as r:
         outf = (filename+' ')[:filename.rfind('.')] + '.out'
         with open(outf, 'w') as w:
-            print("writing to {}".format(outf))
+            print("\nwriting to {}".format(outf))
             line = r.readline()
             while line != '':
                 for z in fixText(line, 's', debug):
@@ -471,16 +481,20 @@ def main(filename, debug):
         #print('')
 
 def dewikify(text):
+    text = re.sub(r"{\|(?!\|})[\s\S]+\n\|}", "", text) # verwijder alle tabellen.
+    text = re.sub(r"<!--[\s\S]*-->", "", text) # verwijder alle comments
     text = re.sub(r"(={1,6})\s+(.*)\s+\1", r"\2", text) # verwijder titelopmaak
     text = re.sub(r"'{2,3}", "", text) # verwijder bold/italic text
     text = re.sub(r"\[\[(?![Ff]ile:|[Ii]mage|[Bb]estand|[Cc]ategor(ie|y))([^\|\]]*\|)?([^\]]+)\]\]", r"\3", text) # verwijder wikilinks, inclusief in afbeelding-captions
     text = re.sub(r"\[\[([Ff]ile:|[Ii]mage|[Bb]estand|[Cc]ategor(ie|y))[^\]]+\]\]", "", text) # verwijder afbeeldingen/categorieën, nadat alle interne [[]] uit de [[File:...|caption [[link]] delen]] zijn verwijderd
     text = re.sub(r"\[([a-z]+:(\/\/)?)[^ ]+ ([^\]]+)\]", r"\3", text) # verwijder externe links
-    text = re.sub(r"<(math|code|nowiki|source|ref)>(?!<\/\1>)(.+)<\/\1>", "", text) # verwijder niet-tekstuele tags incl. inhoud
+    text = re.sub(r"<(math|code|nowiki|source|ref|gallery)>(?!<\/\1>)(.+)<\/\1>", "", text) # verwijder niet-tekstuele tags incl. inhoud
     text = re.sub(r"<[^>]+\/>", "", text) # verwijder alle self-closing tags
+    text = re.sub(r"\n-{4,}\n", "\n", text) # verwijder <hr/>
     rgx = r"\{\{\{((?!(\{|\}){2})(.|\n|\r))+\}\}\}|\{\{((?!(\{|\}){2})(.|\n|\r))+\}\}"
-    while re.search(rgx, text): # blijf de 'innermost' template verwijderen zolang er templates zijn; voorkomt 
+    while re.search(rgx, text): # blijf de 'innermost' template verwijderen zolang er templates zijn
         text = re.sub(rgx, "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text) # maximaal 2 enters achter elkaar
     return text.strip()
 
 def getWiki(filename, debug):
@@ -489,15 +503,19 @@ def getWiki(filename, debug):
     article = filename[len('wikipedia/'):]
     pagina = article
     repeat = 1
-    if article.lower() == 'special:random':
+    if article.lower()[0:len('special:random')] == 'special:random':
         repeat = debug or 1
         debug = 0
     for i in range(repeat):
         r = requests.get('https://nl.wikipedia.org/w/index.php?title={}&action=raw'.format(pagina))
         article = re.findall(r"title=([^&]+)", r.url)[0] # handel redirects af, zoals o.a. Special:Random
-        with open('wikipedia/'+article+'.wiki', 'w') as w:
+        article = re.sub(r"\/|\\", "~", article) # zorg dat er geen slashes in bestanden staan
+        ofile = 'wikipedia/'+article
+        if os.path.exists(ofile+'.txt'):
+            continue
+        with open(ofile+'.wiki', 'w') as w:
             w.write(r.text)
-        with open('wikipedia/'+article+'.txt', 'w') as w:
+        with open(ofile+'.txt', 'w') as w:
             w.write(dewikify(r.text))
             filename = 'wikipedia/'+article+'.txt'
         main(filename, debug)
@@ -507,25 +525,31 @@ def getFok(filename, debug):
     if not filename or not filename.startswith('fok/') or filename.endswith('.txt'):
         return False
     postid = filename[len('fok/'):]
-    url = "http://forum.fok.nl/topic/{}"
-    r = requests.get(url.format(postid))
-    soup = BeautifulSoup(r.text, 'html.parser')
-    todelete = ".quoteTitel, .contents img, .quote b:first-child"
-    delete = soup.select(todelete)
-    while len(delete):
-        print(delete)
-        for d in delete:
-            d.decompose()
+    repeat = 1
+    if postid == '*':
+        repeat = debug or 1
+        debug = 0
+    for i in range(repeat):
+        if postid == '*':
+            postid = random.randint(1, 2500000)
+        url = "http://forum.fok.nl/topic/{}"
+        r = requests.get(url.format(postid))
+        soup = BeautifulSoup(r.text, 'html.parser')
+        todelete = ".quoteTitel, .contents img, .quote b:first-child"
         delete = soup.select(todelete)
-    thread = soup.find_all('div', {'class':'postmain_right'})
-    posts = []
-    for post in thread:
-        text = html2text(str(post))
-        posts.append(text)
-    filename = 'fok/'+postid+'.txt'
-    with open(filename, 'w') as w:
-        w.write("\n\n".join(posts))
-    main(filename, debug)
+        while len(delete):
+            for d in delete:
+                d.decompose()
+            delete = soup.select(todelete)
+        thread = soup.find_all('div', {'class':'postmain_right'})
+        posts = []
+        for post in thread:
+            text = html2text(str(post))
+            posts.append(text)
+        filename = 'fok/'+str(postid)+'.txt'
+        with open(filename, 'w') as w:
+            w.write("\n\n".join(posts))
+        main(filename, debug)
     return True
 
 filename, debug = None, 0
